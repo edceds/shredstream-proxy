@@ -1,5 +1,3 @@
-# Jito Shredstream Proxy
-
-ShredStream provides the lowest latency to shreds from leaders on Solana. 
-
-See more at https://docs.jito.wtf/lowlatencytxnfeed/
+RUST_LOG=info cargo run --release --bin jito-shredstream-proxy -- shredstream \
+ --src-bind-port 4010 \
+ --grpc-service-port 8000

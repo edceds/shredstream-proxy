@@ -1,36 +1,33 @@
 use std::{
     collections::HashMap,
     io,
-    io::{Error, ErrorKind},
-    net::{IpAddr, Ipv4Addr, SocketAddr, ToSocketAddrs},
+    io::{ Error, ErrorKind },
+    net::{ IpAddr, Ipv4Addr, SocketAddr, ToSocketAddrs },
     panic,
-    path::{Path, PathBuf},
+    path::{ Path, PathBuf },
     str::FromStr,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc, RwLock,
-    },
+    sync::{ atomic::{ AtomicBool, Ordering }, Arc, RwLock },
     thread,
-    thread::{sleep, spawn, JoinHandle},
+    thread::{ sleep, spawn, JoinHandle },
     time::Duration,
 };
 
 use arc_swap::ArcSwap;
-use clap::{arg, Parser};
-use crossbeam_channel::{Receiver, RecvError, Sender};
+use clap::{ arg, Parser };
+use crossbeam_channel::{ Receiver, RecvError, Sender };
 use log::*;
-use signal_hook::consts::{SIGINT, SIGTERM};
-use solana_client::client_error::{reqwest, ClientError};
+use signal_hook::consts::{ SIGINT, SIGTERM };
+use solana_client::client_error::{ reqwest, ClientError };
 use solana_ledger::shred::Shred;
 use solana_metrics::set_host_id;
 use solana_perf::deduper::Deduper;
-use solana_sdk::{clock::Slot, signature::read_keypair_file};
+use solana_sdk::{ clock::Slot, signature::read_keypair_file };
 use solana_streamer::streamer::StreamerReceiveStats;
 use thiserror::Error;
-use tokio::{runtime::Runtime, sync::broadcast::Sender as BroadcastSender};
+use tokio::{ runtime::Runtime, sync::broadcast::Sender as BroadcastSender };
 use tonic::Status;
 
-use crate::{forwarder::ShredMetrics, token_authenticator::BlockEngineConnectionError};
+use crate::{ forwarder::ShredMetrics, token_authenticator::BlockEngineConnectionError };
 mod deshred;
 pub mod forwarder;
 mod heartbeat;
@@ -58,21 +55,21 @@ enum ProxySubcommands {
 struct ShredstreamArgs {
     /// Address for Jito Block Engine.
     /// See https://jito-labs.gitbook.io/mev/searcher-resources/block-engine#connection-details
-    #[arg(long, env)]
-    block_engine_url: String,
+    // #[arg(long, env)]
+    // block_engine_url: String,
 
     /// Manual override for auth service address. For internal use.
-    #[arg(long, env)]
-    auth_url: Option<String>,
+    // #[arg(long, env)]
+    // auth_url: Option<String>,
 
     /// Path to keypair file used to authenticate with the backend.
-    #[arg(long, env)]
-    auth_keypair: PathBuf,
+    // #[arg(long, env)]
+    // auth_keypair: PathBuf,
 
     /// Desired regions to receive heartbeats from.
     /// Receives `n` different streams. Requires at least 1 region, comma separated.
-    #[arg(long, env, value_delimiter = ',', required(true))]
-    desired_regions: Vec<String>,
+    // #[arg(long, env, value_delimiter = ',', required(true))]
+    // desired_regions: Vec<String>,
 
     #[clap(flatten)]
     common_args: CommonArgs,
@@ -129,33 +126,30 @@ struct CommonArgs {
 
 #[derive(Debug, Error)]
 pub enum ShredstreamProxyError {
-    #[error("TonicError {0}")]
-    TonicError(#[from] tonic::transport::Error),
-    #[error("GrpcError {0}")]
-    GrpcError(#[from] Status),
-    #[error("ReqwestError {0}")]
-    ReqwestError(#[from] reqwest::Error),
-    #[error("SerdeJsonError {0}")]
-    SerdeJsonError(#[from] serde_json::Error),
-    #[error("RpcError {0}")]
-    RpcError(#[from] ClientError),
-    #[error("BlockEngineConnectionError {0}")]
-    BlockEngineConnectionError(#[from] BlockEngineConnectionError),
-    #[error("RecvError {0}")]
-    RecvError(#[from] RecvError),
-    #[error("IoError {0}")]
-    IoError(#[from] io::Error),
+    #[error("TonicError {0}")] TonicError(#[from] tonic::transport::Error),
+    #[error("GrpcError {0}")] GrpcError(#[from] Status),
+    #[error("ReqwestError {0}")] ReqwestError(#[from] reqwest::Error),
+    #[error("SerdeJsonError {0}")] SerdeJsonError(#[from] serde_json::Error),
+    #[error("RpcError {0}")] RpcError(#[from] ClientError),
+    #[error("BlockEngineConnectionError {0}")] BlockEngineConnectionError(
+        #[from] BlockEngineConnectionError,
+    ),
+    #[error("RecvError {0}")] RecvError(#[from] RecvError),
+    #[error("IoError {0}")] IoError(#[from] io::Error),
     #[error("Shutdown")]
     Shutdown,
 }
 
 fn resolve_hostname_port(hostname_port: &str) -> io::Result<(SocketAddr, String)> {
-    let socketaddr = hostname_port.to_socket_addrs()?.next().ok_or_else(|| {
-        Error::new(
-            ErrorKind::AddrNotAvailable,
-            format!("Could not find destination {hostname_port}"),
-        )
-    })?;
+    let socketaddr = hostname_port
+        .to_socket_addrs()?
+        .next()
+        .ok_or_else(|| {
+            Error::new(
+                ErrorKind::AddrNotAvailable,
+                format!("Could not find destination {hostname_port}")
+            )
+        })?;
 
     Ok((socketaddr, hostname_port.to_string()))
 }
@@ -163,7 +157,8 @@ fn resolve_hostname_port(hostname_port: &str) -> io::Result<(SocketAddr, String)
 /// Returns public-facing IPV4 address
 pub fn get_public_ip() -> reqwest::Result<IpAddr> {
     info!("Requesting public ip from ifconfig.me...");
-    let client = reqwest::blocking::Client::builder()
+    let client = reqwest::blocking::Client
+        ::builder()
         .local_address(IpAddr::V4(Ipv4Addr::UNSPECIFIED))
         .build()?;
     let response = client.get("https://ifconfig.me/ip").send()?.text()?;
@@ -208,32 +203,41 @@ fn main() -> Result<(), ShredstreamProxyError> {
         ProxySubcommands::ForwardOnly(x) => x,
     };
     set_host_id(hostname::get()?.into_string().unwrap());
-    if (args.endpoint_discovery_url.is_none() && args.discovered_endpoints_port.is_some())
-        || (args.endpoint_discovery_url.is_some() && args.discovered_endpoints_port.is_none())
-    {
-        panic!("Invalid arguments provided, dynamic endpoints requires both --endpoint-discovery-url and --discovered-endpoints-port.")
-    }
-    if args.endpoint_discovery_url.is_none()
-        && args.discovered_endpoints_port.is_none()
-        && args.dest_ip_ports.is_empty()
-    {
-        panic!("No destinations found. You must provide values for --dest-ip-ports or --endpoint-discovery-url.")
-    }
+    // if
+    //     (args.endpoint_discovery_url.is_none() && args.discovered_endpoints_port.is_some()) ||
+    //     (args.endpoint_discovery_url.is_some() && args.discovered_endpoints_port.is_none())
+    // {
+    //     panic!(
+    //         "Invalid arguments provided, dynamic endpoints requires both --endpoint-discovery-url and --discovered-endpoints-port."
+    //     );
+    // }
+    // if
+    //     args.endpoint_discovery_url.is_none() &&
+    //     args.discovered_endpoints_port.is_none() &&
+    //     args.dest_ip_ports.is_empty()
+    // {
+    //     panic!(
+    //         "No destinations found. You must provide values for --dest-ip-ports or --endpoint-discovery-url."
+    //     );
+    // }
 
     let exit = Arc::new(AtomicBool::new(false));
-    let (shutdown_sender, shutdown_receiver) =
-        shutdown_notifier(exit.clone()).expect("Failed to set up signal handler");
+    let (shutdown_sender, shutdown_receiver) = shutdown_notifier(exit.clone()).expect(
+        "Failed to set up signal handler"
+    );
     let panic_hook = panic::take_hook();
     {
         let exit = exit.clone();
-        panic::set_hook(Box::new(move |panic_info| {
-            exit.store(true, Ordering::SeqCst);
-            let _ = shutdown_sender.send(());
-            error!("exiting process");
-            sleep(Duration::from_secs(1));
-            // invoke the default handler and exit the process
-            panic_hook(panic_info);
-        }));
+        panic::set_hook(
+            Box::new(move |panic_info| {
+                exit.store(true, Ordering::SeqCst);
+                let _ = shutdown_sender.send(());
+                error!("exiting process");
+                sleep(Duration::from_secs(1));
+                // invoke the default handler and exit the process
+                panic_hook(panic_info);
+            })
+        );
     }
 
     let metrics = Arc::new(ShredMetrics::new(args.grpc_service_port.is_some()));
@@ -241,31 +245,32 @@ fn main() -> Result<(), ShredstreamProxyError> {
     let runtime = Runtime::new()?;
     let mut thread_handles = vec![];
     if let ProxySubcommands::Shredstream(args) = shredstream_args {
-        if args.desired_regions.len() > 2 {
-            warn!(
-                "Too many regions requested, only regions: {:?} will be used",
-                &args.desired_regions[..2]
-            );
-        }
-        let heartbeat_hdl =
-            start_heartbeat(args, &exit, &shutdown_receiver, runtime, metrics.clone());
-        thread_handles.push(heartbeat_hdl);
+        // if args.desired_regions.len() > 2 {
+        //     warn!(
+        //         "Too many regions requested, only regions: {:?} will be used",
+        //         &args.desired_regions[..2]
+        //     );
+        // }
+        // let heartbeat_hdl =
+        //     start_heartbeat(args, &exit, &shutdown_receiver, runtime, metrics.clone());
+        // thread_handles.push(heartbeat_hdl);
     }
 
     // share sockets between refresh and forwarder thread
-    let unioned_dest_sockets = Arc::new(ArcSwap::from_pointee(
-        args.dest_ip_ports
-            .iter()
-            .map(|x| x.0)
-            .collect::<Vec<SocketAddr>>(),
-    ));
+    let unioned_dest_sockets = Arc::new(
+        ArcSwap::from_pointee(
+            args.dest_ip_ports
+                .iter()
+                .map(|x| x.0)
+                .collect::<Vec<SocketAddr>>()
+        )
+    );
 
     // share deduper + metrics between forwarder <-> accessory thread
     // use mutex since metrics are write heavy. cheaper than rwlock
-    let deduper = Arc::new(RwLock::new(Deduper::<2, [u8]>::new(
-        &mut rand::thread_rng(),
-        forwarder::DEDUPER_NUM_BITS,
-    )));
+    let deduper = Arc::new(
+        RwLock::new(Deduper::<2, [u8]>::new(&mut rand::thread_rng(), forwarder::DEDUPER_NUM_BITS))
+    );
 
     let entry_sender = Arc::new(BroadcastSender::new(100));
     let forward_stats = Arc::new(StreamerReceiveStats::new("shredstream_proxy-listen_thread"));
@@ -284,7 +289,7 @@ fn main() -> Result<(), ShredstreamProxyError> {
         forward_stats.clone(),
         metrics.clone(),
         shutdown_receiver.clone(),
-        exit.clone(),
+        exit.clone()
     );
     thread_handles.extend(forwarder_hdls);
 
@@ -304,7 +309,7 @@ fn main() -> Result<(), ShredstreamProxyError> {
         metrics.clone(),
         args.metrics_report_interval_ms,
         shutdown_receiver.clone(),
-        exit.clone(),
+        exit.clone()
     );
     thread_handles.push(metrics_hdl);
     if use_discovery_service {
@@ -314,25 +319,24 @@ fn main() -> Result<(), ShredstreamProxyError> {
             args.dest_ip_ports,
             unioned_dest_sockets,
             shutdown_receiver.clone(),
-            exit.clone(),
+            exit.clone()
         );
         thread_handles.push(refresh_handle);
     }
+
+    info!("grpc_service_port: {:?}", args.grpc_service_port);
 
     if let Some(port) = args.grpc_service_port {
         let server_hdl = server::start_server_thread(
             SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), port),
             entry_sender.clone(),
             exit.clone(),
-            shutdown_receiver.clone(),
+            shutdown_receiver.clone()
         );
         thread_handles.push(server_hdl);
     }
 
-    info!(
-        "Shredstream started, listening on {}:{}/udp.",
-        args.src_bind_addr, args.src_bind_port
-    );
+    info!("Shredstream started, listening on {}:{}/udp.", args.src_bind_addr, args.src_bind_port);
 
     for thread in thread_handles {
         thread.join().expect("thread panicked");
@@ -341,46 +345,42 @@ fn main() -> Result<(), ShredstreamProxyError> {
     info!(
         "Exiting Shredstream, {} received , {} sent successfully, {} failed, {} duplicate shreds.",
         metrics.agg_received_cumulative.load(Ordering::Relaxed),
-        metrics
-            .agg_success_forward_cumulative
-            .load(Ordering::Relaxed),
+        metrics.agg_success_forward_cumulative.load(Ordering::Relaxed),
         metrics.agg_fail_forward_cumulative.load(Ordering::Relaxed),
-        metrics.duplicate_cumulative.load(Ordering::Relaxed),
+        metrics.duplicate_cumulative.load(Ordering::Relaxed)
     );
     Ok(())
 }
 
-fn start_heartbeat(
-    args: ShredstreamArgs,
-    exit: &Arc<AtomicBool>,
-    shutdown_receiver: &Receiver<()>,
-    runtime: Runtime,
-    metrics: Arc<ShredMetrics>,
-) -> JoinHandle<()> {
-    let auth_keypair = Arc::new(
-        read_keypair_file(Path::new(&args.auth_keypair)).unwrap_or_else(|e| {
-            panic!(
-                "Unable to parse keypair file. Ensure that file {:?} is readable. Error: {e}",
-                args.auth_keypair
-            )
-        }),
-    );
+// fn start_heartbeat(
+//     args: ShredstreamArgs,
+//     exit: &Arc<AtomicBool>,
+//     shutdown_receiver: &Receiver<()>,
+//     runtime: Runtime,
+//     metrics: Arc<ShredMetrics>
+// ) -> JoinHandle<()> {
+//     let auth_keypair = Arc::new(
+//         read_keypair_file(Path::new(&args.auth_keypair)).unwrap_or_else(|e| {
+//             panic!(
+//                 "Unable to parse keypair file. Ensure that file {:?} is readable. Error: {e}",
+//                 args.auth_keypair
+//             )
+//         })
+//     );
 
-    heartbeat::heartbeat_loop_thread(
-        args.block_engine_url.clone(),
-        args.auth_url.unwrap_or(args.block_engine_url),
-        auth_keypair,
-        args.desired_regions,
-        SocketAddr::new(
-            args.common_args
-                .public_ip
-                .unwrap_or_else(|| get_public_ip().unwrap()),
-            args.common_args.src_bind_port,
-        ),
-        runtime,
-        "shredstream_proxy".to_string(),
-        metrics,
-        shutdown_receiver.clone(),
-        exit.clone(),
-    )
-}
+//     heartbeat::heartbeat_loop_thread(
+//         args.block_engine_url.clone(),
+//         args.auth_url.unwrap_or(args.block_engine_url),
+//         auth_keypair,
+//         args.desired_regions,
+//         SocketAddr::new(
+//             args.common_args.public_ip.unwrap_or_else(|| get_public_ip().unwrap()),
+//             args.common_args.src_bind_port
+//         ),
+//         runtime,
+//         "shredstream_proxy".to_string(),
+//         metrics,
+//         shutdown_receiver.clone(),
+//         exit.clone()
+//     )
+// }
